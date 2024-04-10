@@ -17,7 +17,6 @@ let
     home = cfg.dataDir;
   };
 in {
-  imports = [];
   options.services.garrys-mod = {
     enable = mkEnableOption "Garry's Mod";
     dataDir = mkOption {
@@ -77,6 +76,11 @@ in {
         A workshop collection that srcds_run will download before starting the server.
       '';
     };
+    package = mkPackageOption pkgs  [ "garrys-mod" "dedicated-server-unwrapped" ] {};
+    finalPackage = mkOption {
+      type = with types; package;
+      default = cfg.package.override { inherit (cfg) extraPaths; };
+    };
     extraPaths = mkOption {
       default = [];
       example = [
@@ -132,38 +136,41 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
-    systemd.services.garrys-mod = let
-      serverPkg = gpkgs.dedicated-server-unwrapped.override { inherit (cfg) extraPaths; };
-      runWrapper = gpkgs.dedicated-server.override {
-        dedicated-server-unwrapped = serverPkg;
-        defaultArgs = {
-          inherit (cfg) dataDir;
-          consoleArgs = {
-            inherit (cfg) port gamemode map;
-          } // cfg.extraArgs
-          // (if cfg.address != null then { ip = cfg.address; } else {})
-          // (if cfg.workshopCollection != null then { host_workshop_collection = cfg.workshopCollection; } else {});
+  config = mkMerge [
+    {nixpkgs.overlays = [(final: prev: {garrys-mod = gpkgs;})];}
+    (mkIf cfg.enable {
+      systemd.services.garrys-mod = let
+        serverPkg = cfg.finalPackage;
+        runWrapper = gpkgs.dedicated-server.override {
+          dedicated-server-unwrapped = serverPkg;
+          defaultArgs = {
+            inherit (cfg) dataDir;
+            consoleArgs = {
+              inherit (cfg) port gamemode map;
+            } // cfg.extraArgs
+            // (if cfg.address != null then { ip = cfg.address; } else {})
+            // (if cfg.workshopCollection != null then { host_workshop_collection = cfg.workshopCollection; } else {});
+          };
+        };
+      in {
+        description = "Garry's Mod dedicated server";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ];
+
+        serviceConfig = {
+          Type = "simple";
+          User = cfg.user;
+          ExecStart = "${runWrapper}/bin/run-gmod-server";
+          UMask = cfg.umask;
         };
       };
-    in {
-      description = "Garry's Mod dedicated server";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
-
-      serviceConfig = {
-        Type = "simple";
-        User = cfg.user;
-        ExecStart = "${runWrapper}/bin/run-gmod-server";
-        UMask = cfg.umask;
+      users = mkIf (cfg.user == defaultUser.name) {
+        users.garrys-mod = defaultUser;
+        groups.garrys-mod = {};
       };
-    };
-    users = mkIf (cfg.user == defaultUser.name) {
-      users.garrys-mod = defaultUser;
-      groups.garrys-mod = {};
-    };
-    networking.firewall = mkIf cfg.openFirewall {
-      allowedUDPPorts = [ cfg.port ];
-    };
-  };
+      networking.firewall = mkIf cfg.openFirewall {
+        allowedUDPPorts = [ cfg.port ];
+      };
+    })
+  ];
 }
